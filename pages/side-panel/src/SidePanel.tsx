@@ -56,6 +56,11 @@ const SidePanel = () => {
   const recordingTimerRef = useRef<number | null>(null);
   const [input, setInput] = useState("");
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [waitingForUserInput, setWaitingForUserInput] = useState<{
+  question: string;
+  expectedFormat?: string;
+  context?: string;
+  } | null>(null);
 
   // Check for dark mode preference
   useEffect(() => {
@@ -327,7 +332,16 @@ const SidePanel = () => {
               }
               break;
             case ExecutionState.ACT_OK:
-              skip = !isReplayingRef.current;
+              if (content && content.startsWith('Waiting for user input:')) {
+                setWaitingForUserInput({
+                  question: content.replace('Waiting for user input: ', ''),
+                });
+                setInputEnabled(true);
+                setShowStopButton(false);
+                skip = false;
+              } else {
+                skip = !isReplayingRef.current;
+              }
               break;
             case ExecutionState.ACT_FAIL:
               skip = false;
@@ -400,7 +414,7 @@ const SidePanel = () => {
       portRef.current = chrome.runtime.connect({ name: 'side-panel-connection' });
 
       // biome-ignore lint/suspicious/noExplicitAny: <explanation>
-      portRef.current.onMessage.addListener((message: any) => {
+      portRef.current.onMessage.addListener((message: any) => { 
         // Add type checking for message
         if (message && message.type === EventType.EXECUTION) {
           handleTaskState(message);
@@ -645,95 +659,125 @@ const SidePanel = () => {
   };
 
   const handleSendMessage = async (text: string) => {
-    console.log('handleSendMessage', text);
+  console.log('handleSendMessage', text);
 
-    // Trim the input text first
-    const trimmedText = text.trim();
+  const trimmedText = text.trim();
+  if (!trimmedText) return;
 
-    if (!trimmedText) return;
-
-    // Check if the input is a command (starts with /)
-    if (trimmedText.startsWith('/')) {
-      // Process command and return if it was handled
-      const wasHandled = await handleCommand(trimmedText);
-      if (wasHandled) return;
-    }
-
-    // Block sending messages in historical sessions
-    if (isHistoricalSession) {
-      console.log('Cannot send messages in historical sessions');
-      return;
-    }
-
+  // Check if we're responding to an agent's question
+  if (waitingForUserInput) {
     try {
-      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-      const tabId = tabs[0]?.id;
-      if (!tabId) {
-        throw new Error('No active tab found');
+      // Send user response to background script
+      if (portRef.current) {
+        portRef.current.postMessage({
+          type: 'user_response',
+          response: trimmedText,
+          taskId: sessionIdRef.current,
+        });
       }
 
+      // Add user message to chat
+      const userMessage = {
+        actor: Actors.USER,
+        content: trimmedText,
+        timestamp: Date.now(),
+      };
+      appendMessage(userMessage, sessionIdRef.current);
+
+      // Clear waiting state and show that we're processing
+      setWaitingForUserInput(null);
       setInputEnabled(false);
       setShowStopButton(true);
 
-      // Create a new chat session for this task if not in follow-up mode
-      if (!isFollowUpMode) {
-        const newSession = await chatHistoryStore.createSession(
-          text.substring(0, 50) + (text.length > 50 ? '...' : ''),
-        );
-        console.log('newSession', newSession);
-
-        // Store the session ID in both state and ref
-        const sessionId = newSession.id;
-        setCurrentSessionId(sessionId);
-        sessionIdRef.current = sessionId;
-      }
-
-      const userMessage = {
-        actor: Actors.USER,
-        content: text,
-        timestamp: Date.now(),
-      };
-
-      // Pass the sessionId directly to appendMessage
-      appendMessage(userMessage, sessionIdRef.current);
-
-      // Setup connection if not exists
-      if (!portRef.current) {
-        setupConnection();
-      }
-
-      // Send message using the utility function
-      if (isFollowUpMode) {
-        // Send as follow-up task
-        await sendMessage({
-          type: 'follow_up_task',
-          task: text,
-          taskId: sessionIdRef.current,
-          tabId,
-        });
-        console.log('follow_up_task sent', text, tabId, sessionIdRef.current);
-      } else {
-        // Send as new task
-        await sendMessage({
-          type: 'new_task',
-          task: text,
-          taskId: sessionIdRef.current,
-          tabId,
-        });
-        console.log('new_task sent', text, tabId, sessionIdRef.current);
-      }
+      return; // Don't proceed with normal task handling
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      console.error('Task error', errorMessage);
+      console.error('Failed to send user response:', err);
       appendMessage({
         actor: Actors.SYSTEM,
-        content: errorMessage,
+        content: `Failed to send response: ${errorMessage}`,
         timestamp: Date.now(),
       });
-      setInputEnabled(true);
-      setShowStopButton(false);
-      stopConnection();
     }
+    return;
+  }
+
+  // Handle commands that start with /
+  if (trimmedText.startsWith('/')) {
+    const wasHandled = await handleCommand(trimmedText);
+    if (wasHandled) return;
+  }
+
+  // Block sending messages in historical sessions
+  if (isHistoricalSession) {
+    console.log('Cannot send messages in historical sessions');
+    return;
+  }
+
+  // Rest of the existing handleSendMessage logic...
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabId = tabs[0]?.id;
+    if (!tabId) {
+      throw new Error('No active tab found');
+    }
+
+    setInputEnabled(false);
+    setShowStopButton(true);
+
+    // Create a new chat session for this task if not in follow-up mode
+    if (!isFollowUpMode) {
+      const newSession = await chatHistoryStore.createSession(
+        text.substring(0, 50) + (text.length > 50 ? '...' : ''),
+      );
+      console.log('newSession', newSession);
+
+      const sessionId = newSession.id;
+      setCurrentSessionId(sessionId);
+      sessionIdRef.current = sessionId;
+    }
+
+    const userMessage = {
+      actor: Actors.USER,
+      content: text,
+      timestamp: Date.now(),
+    };
+
+    appendMessage(userMessage, sessionIdRef.current);
+
+    if (!portRef.current) {
+      setupConnection();
+    }
+
+    if (isFollowUpMode) {
+      await sendMessage({
+        type: 'follow_up_task',
+        task: text,
+        taskId: sessionIdRef.current,
+        tabId,
+      });
+      console.log('follow_up_task sent', text, tabId, sessionIdRef.current);
+    } else {
+      await sendMessage({
+        type: 'new_task',
+        task: text,
+        taskId: sessionIdRef.current,
+        tabId,
+      });
+      console.log('new_task sent', text, tabId, sessionIdRef.current);
+    }
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    console.error('Task error', errorMessage);
+    appendMessage({
+      actor: Actors.SYSTEM,
+      content: errorMessage,
+      timestamp: Date.now(),
+    });
+    setInputEnabled(true);
+    setShowStopButton(false);
+    stopConnection();
+  }
   };
 
   // NEW: RAG send
@@ -1297,6 +1341,31 @@ const SidePanel = () => {
                 {messages.length > 0 && (
                   <div
                     className={`border-t ${isDarkMode ? 'border-sky-900' : 'border-sky-100'} p-2 shadow-sm backdrop-blur-sm`}>
+                    {waitingForUserInput && (
+                    <div className={`mx-4 mb-2 p-3 rounded-lg border-l-4 ${
+                      isDarkMode
+                        ? 'bg-slate-800 text-gray-200 border-slate-600'
+                        : 'bg-blue-50 text-gray-800 border-blue-200'
+                        }`}>
+                      <div className="flex items-center">
+                        <span className="text-blue-500 mr-2">💬</span>
+                        <span className="text-sm font-medium">Agent is waiting for your response:</span>
+                      </div>
+                      <p className="mt-1 text-sm italic">
+                        {waitingForUserInput.question}
+                      </p>
+                      {waitingForUserInput.expectedFormat && (
+                        <p className="mt-1 text-xs opacity-75">
+                          Expected format: {waitingForUserInput.expectedFormat}
+                        </p>
+                      )}
+                      {waitingForUserInput.context && (
+                        <p className="mt-1 text-xs opacity-75">
+                          Context: {waitingForUserInput.context}
+                        </p>
+                      )}
+                      </div>
+                      )}
                     <ChatInput
                       onSendMessage={mode === 'rag' ? handleSendMessageRAG : handleSendMessage} // <-- route here
                       onStopTask={handleStopTask}                 // RAG doesn’t use stop

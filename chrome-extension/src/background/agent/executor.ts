@@ -437,4 +437,21 @@ export class Executor {
       });
     }
   }
+
+  async resumeAfterUserInput(userResponse: string): Promise<void> {
+  const logger = createLogger('Executor:resumeAfterUserInput');
+  
+  if (this.context.waitingForUserInput) {
+    logger.info(`📝 User responded: ${userResponse}`);
+    
+    // Handle the user response
+    await this.context.handleUserResponse(userResponse);
+    
+    // Continue execution from where we left off
+    logger.info('🔄 Resuming execution after user input');
+    await this.execute();
+  } else {
+    logger.warning('Received user response but not waiting for input');
+  }
+  }
 }

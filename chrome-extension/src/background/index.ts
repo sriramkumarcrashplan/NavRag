@@ -71,6 +71,17 @@ chrome.runtime.onConnect.addListener(port => {
             port.postMessage({ type: 'heartbeat_ack' });
             break;
 
+          case 'user_response': {
+            // Resume the Executor with the user’s reply
+            if (!message.taskId || !message.response) {
+              return port.postMessage({ type: 'error', error: 'Missing taskId or response' });
+            }
+            if (currentExecutor) {
+              await currentExecutor.resumeAfterUserInput(message.response);
+            }
+            return;
+          }
+
           case 'new_task': {
             if (!message.task) return port.postMessage({ type: 'error', error: t('bg_cmd_newTask_noTask') });
             if (!message.tabId) return port.postMessage({ type: 'error', error: t('bg_errors_noTabId') });

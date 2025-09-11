@@ -22,6 +22,7 @@ import {
   nextPageActionSchema,
   scrollToTopActionSchema,
   scrollToBottomActionSchema,
+  askUserActionSchema,
 } from './schemas';
 import { z } from 'zod';
 import { createLogger } from '@src/background/log';
@@ -701,6 +702,54 @@ export class ActionBuilder {
       true,
     );
     actions.push(selectDropdownOption);
+
+    const askUser = new Action(async (input: z.infer<typeof askUserActionSchema.schema>) => {
+      const intent = input.intent || `Asking user: ${input.question}`;
+      this.context.emitEvent(Actors.NAVIGATOR, ExecutionState.ACT_START, intent);
+
+    try {
+      // Format the question message for the user
+      let questionMessage = `🤖 **I need some information to continue:**\n\n${input.question}`;
+      
+      if (input.expectedFormat) {
+        questionMessage += `\n\n📝 **Expected format:** ${input.expectedFormat}`;
+      }
+      
+      if (input.context) {
+        questionMessage += `\n\n💡 **Why I need this:** ${input.context}`;
+      }
+
+      // Set the waiting state in context
+      this.context.waitingForUserInput = {
+        question: input.question,
+        timestamp: Date.now(),
+        expectedFormat: input.expectedFormat,
+        context: input.context,
+      };
+
+      // Pause the execution
+      this.context.pause();
+
+      const msg = `Waiting for user input: ${input.question}`;
+      this.context.emitEvent(Actors.NAVIGATOR, ExecutionState.ACT_OK, msg);
+      
+      return new ActionResult({
+        isDone: false,
+        extractedContent: questionMessage,
+        includeInMemory: true,
+      });
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.context.emitEvent(Actors.NAVIGATOR, ExecutionState.ACT_FAIL, errorMessage);
+      return new ActionResult({
+        error: errorMessage,
+        includeInMemory: true,
+      });
+    }
+    }, askUserActionSchema);
+
+    actions.push(askUser);
 
     return actions;
   }

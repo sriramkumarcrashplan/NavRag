@@ -213,3 +213,14 @@ export const waitActionSchema: ActionSchema = {
     seconds: z.number().int().default(3).describe('amount of seconds'),
   }),
 };
+
+export const askUserActionSchema: ActionSchema = {
+  name: 'ask_user',
+  description: 'Ask the user for specific information as part of the conversation flow. The agent will pause execution and wait for the user to respond in the chat.',
+  schema: z.object({
+    intent: z.string().default('').describe('purpose of this action'),
+    question: z.string().describe('specific question to ask the user'),
+    expectedFormat: z.string().optional().describe('expected format or example of the answer'),
+    context: z.string().optional().describe('additional context about why this information is needed'),
+  }),
+};

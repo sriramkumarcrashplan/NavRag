@@ -33,6 +33,13 @@ export const DEFAULT_AGENT_OPTIONS: AgentOptions = {
   planningInterval: 3,
 };
 
+export interface UserInputWaitState {
+  question: string;
+  timestamp: number;
+  expectedFormat?: string;
+  context?: string;
+}
+
 export class AgentContext {
   controller: AbortController;
   taskId: string;
@@ -49,6 +56,7 @@ export class AgentContext {
   stateMessageAdded: boolean;
   history: AgentStepHistory;
   finalAnswer: string | null;
+  waitingForUserInput?: UserInputWaitState;
 
   constructor(
     taskId: string,
@@ -96,6 +104,22 @@ export class AgentContext {
   async stop() {
     this.stopped = true;
     setTimeout(() => this.controller.abort(), 300);
+  }
+
+  async handleUserResponse(response: string) {
+    if (this.waitingForUserInput) {
+      // Add the user's response to action results for the agent to use
+      this.actionResults.push(new ActionResult({
+        extractedContent: `User provided: ${response}`,
+        includeInMemory: true,
+      }));
+
+      // Clear the waiting state
+      this.waitingForUserInput = undefined;
+
+      // Resume execution
+      this.resume();
+    }
   }
 }
 
