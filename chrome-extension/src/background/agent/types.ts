@@ -57,6 +57,8 @@ export class AgentContext {
   history: AgentStepHistory;
   finalAnswer: string | null;
   waitingForUserInput?: UserInputWaitState;
+  taskCompleted: boolean = false; // ← Add this
+  lastTaskId: string | null = null;
 
   constructor(
     taskId: string,
@@ -83,6 +85,16 @@ export class AgentContext {
     this.finalAnswer = null;
   }
 
+  markTaskCompleted(finalAnswer?: string) {
+    this.taskCompleted = true;
+    this.finalAnswer = finalAnswer || this.finalAnswer;
+  }
+  
+  // ← Add this method  
+  isNewTask(taskId: string): boolean {
+    return this.lastTaskId !== taskId;
+  }
+
   async emitEvent(actor: Actors, state: ExecutionState, eventDetails: string) {
     const event = new AgentEvent(actor, state, {
       taskId: this.taskId,
@@ -107,7 +119,7 @@ export class AgentContext {
   }
 
   async handleUserResponse(response: string) {
-    if (this.waitingForUserInput) {
+    if (this.waitingForUserInput) { 
       // Add the user's response to action results for the agent to use
       this.actionResults.push(new ActionResult({
         extractedContent: `User provided: ${response}`,

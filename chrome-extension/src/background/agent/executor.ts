@@ -40,6 +40,7 @@ export class Executor {
   private readonly navigatorPrompt: NavigatorPrompt;
   private readonly generalSettings: GeneralSettingsConfig | undefined;
   private tasks: string[] = [];
+  
   constructor(
     task: string,
     taskId: string,
@@ -48,7 +49,6 @@ export class Executor {
     extraArgs?: Partial<ExecutorExtraArgs>,
   ) {
     const messageManager = new MessageManager();
-
     const plannerLLM = extraArgs?.plannerLLM ?? navigatorLLM;
     const extractorLLM = extraArgs?.extractorLLM ?? navigatorLLM;
     const eventManager = new EventManager();
@@ -169,6 +169,7 @@ export class Executor {
       let step = 0;
       let latestPlanOutput: AgentOutput<PlannerOutput> | null = null;
       let navigatorDone = false;
+      let taskCompleted = false;
 
       for (step = 0; step < allowedMaxSteps; step++) {
         context.stepInfo = {
@@ -179,6 +180,12 @@ export class Executor {
         logger.info(`🔄 Step ${step + 1} / ${allowedMaxSteps}`);
         if (await this.shouldStop()) {
           break;
+        }
+
+        if (this.isTaskAlreadyCompleted()) {
+        logger.info('✅ Task already completed, skipping execution');
+        taskCompleted = true;
+        break;
         }
 
         // Run planner periodically for guidance
@@ -236,6 +243,19 @@ export class Executor {
         logger.info('Replay historical tasks is disabled, skipping history storage');
       }
     }
+  }
+
+  private isTaskAlreadyCompleted(): boolean {
+  // Check if we have action results indicating completion
+  const hasCompletionResult = this.context.actionResults.some(result => 
+    result.isDone || 
+    (result.extractedContent && result.extractedContent.includes('already completed'))
+  );
+  
+  // Check if final answer was already set
+  const hasFinalAnswer = !!this.context.finalAnswer;
+  
+  return hasCompletionResult || hasFinalAnswer;
   }
 
   private async navigate(): Promise<boolean> {

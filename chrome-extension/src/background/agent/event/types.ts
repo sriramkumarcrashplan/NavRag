@@ -45,6 +45,7 @@ export enum ExecutionState {
   ACT_START = 'act.start',
   ACT_OK = 'act.ok',
   ACT_FAIL = 'act.fail',
+  WAITING_FOR_USER_INPUT = "WAITING_FOR_USER_INPUT",
 }
 
 export interface EventData {

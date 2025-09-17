@@ -1,7 +1,7 @@
 // src/sidepanel/ragClient.ts
 export type RAGSource = { file_path?: string; title?: string; id?: string; score?: number };
 
-const BASE_URL =  "http://127.0.0.1:5000";
+const BASE_URL =  "https://parablu-rag-chatbot.parablu.com";
 
 export async function ragNewSession(): Promise<string> {
   const res = await fetch(`${BASE_URL}/new_chat_session`, { method: "POST" });
@@ -16,12 +16,17 @@ export async function ragHistory(sessionId: string) {
   return (await res.json()) as Array<{ role: "user" | "assistant"; content: string; sources?: RAGSource[] }>;
 }
 
-export async function ragAsk(sessionId: string, question: string) {
+export async function ragAsk(sessionId: string, question: string): Promise<{ answer: string; sources?: RAGSource[] }> {
+  const form = new FormData();
+  form.append("session_id", sessionId);
+  form.append("query", question);
+
   const res = await fetch(`${BASE_URL}/ask`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, question }),
+    body: form,
   });
   if (!res.ok) throw new Error(`ask failed: ${res.status}`);
-  return (await res.json()) as { answer: string; sources?: RAGSource[] };
+  const data = await res.json();
+  // **Make sure to return the parsed JSON**:
+  return { answer: data.answer as string, sources: data.sources as RAGSource[] };
 }

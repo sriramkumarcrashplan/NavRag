@@ -45,6 +45,7 @@ const SidePanel = () => {
   const [isProcessingSpeech, setIsProcessingSpeech] = useState(false);
   const [isReplaying, setIsReplaying] = useState(false);
   const [replayEnabled, setReplayEnabled] = useState(false);
+  const [isRagLoading, setIsRagLoading] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const isReplayingRef = useRef<boolean>(false);
   const portRef = useRef<chrome.runtime.Port | null>(null);
@@ -55,6 +56,9 @@ const SidePanel = () => {
   const audioChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<number | null>(null);
   const [input, setInput] = useState("");
+  const [firstQueryDone, setFirstQueryDone] = useState(false);
+  const [showAutomateButton, setShowAutomateButton] = useState(false);
+  const [ragResponse, setRagResponse] = useState<{ originalQuery: string; answer: string; sources?: RAGSource[] } | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [waitingForUserInput, setWaitingForUserInput] = useState<{
   question: string;
@@ -194,9 +198,9 @@ const SidePanel = () => {
 
   useEffect(() => {
   (async () => {
-    if (mode !== 'rag') return;
     try {
-      const { rag_session_id } = await chrome.storage.local.get('rag_session_id') as any;
+      // Retrieve existing session or create a new one
+      const { rag_session_id } = (await chrome.storage.local.get('rag_session_id')) as any;
       let sid: string | null = rag_session_id || null;
 
       if (!sid) {
@@ -205,22 +209,33 @@ const SidePanel = () => {
       }
       setRagSessionId(sid);
       setRagHealthy(true);
-
-      const hist = await ragHistory(sid);
-      const mapped = hist.map(h => ({
-        actor: h.role === 'assistant' ? Actors.NAVIGATOR : Actors.USER,
-        content: h.content,
-        timestamp: Date.now(),
-      })) as Message[];
-
-      setMessages(mapped);
-      setIsHistoricalSession(false);
-      setIsFollowUpMode(true);
     } catch {
       setRagHealthy(false);
     }
   })();
-  }, [mode]);
+}, []);
+
+// Load RAG history only when switching to RAG mode
+useEffect(() => {
+    if (mode === 'rag' && ragSessionId) {
+      (async () => {
+        try {
+          const hist = await ragHistory(ragSessionId);
+          const mapped = hist.map(h => ({
+            actor: h.role === 'assistant' ? Actors.NAVIGATOR : Actors.USER,
+            content: h.content,
+            timestamp: Date.now(),
+          })) as Message[];
+
+          setMessages(mapped);
+          setIsHistoricalSession(false);
+          setIsFollowUpMode(true);
+        } catch (error) {
+          console.error('Failed to load RAG history:', error);
+        }
+      })();
+    }
+  }, [mode, ragSessionId]);
 
   const appendMessage = useCallback((newMessage: Message, sessionId?: string | null) => {
     // Don't save progress messages
@@ -664,6 +679,27 @@ const SidePanel = () => {
   const trimmedText = text.trim();
   if (!trimmedText) return;
 
+  if (!firstQueryDone && ragSessionId) {
+    setIsRagLoading(true);
+    // Step 1: RAG Query Only
+    const ragResult = await ragAsk(ragSessionId, trimmedText);
+    setIsRagLoading(false);
+    
+    // Display RAG response
+    appendMessage({
+      actor: Actors.NAVIGATOR,
+      content: ragResult.answer + formatSources(ragResult.sources),
+      timestamp: Date.now(),
+    });
+    
+    // Show "Automate" button for this response
+    setShowAutomateButton(true);
+    setRagResponse({ originalQuery: trimmedText, answer: ragResult.answer, sources: ragResult.sources });
+    setFirstQueryDone(true);
+    return;
+  }
+
+
   // Check if we're responding to an agent's question
   if (waitingForUserInput) {
     try {
@@ -698,6 +734,7 @@ const SidePanel = () => {
         content: `Failed to send response: ${errorMessage}`,
         timestamp: Date.now(),
       });
+
     }
     return;
   }
@@ -816,7 +853,25 @@ const SidePanel = () => {
   }
   };
 
+  /** Trigger automation using the original RAG query */
+  const handleAutomateTask = async () => {
+    if (!ragResponse) return;
+    setShowAutomateButton(false);
+    setMode('automation');
+    // Reuse handleSendMessage to start automation
+    await handleSendMessage(ragResponse.originalQuery!);
+  };
 
+  type RAGSource = { file_path?: string; title?: string; id?: string; score?: number };
+  function formatSources(sources?: RAGSource[]): string {
+   if (!sources || sources.length === 0) return '';
+   return '\n\nSources:\n' + sources
+     .map((s, i) =>
+       `• ${s.file_path || s.title || s.id || `source ${i+1}`}` +
+       (typeof s.score === 'number' ? ` (score: ${s.score.toFixed(3)})` : '')
+     )
+     .join('\n');
+ }
 
   const handleStopTask = async () => {
     try {
@@ -837,17 +892,24 @@ const SidePanel = () => {
   };
 
   const handleNewChat = () => {
-    // Clear messages and start a new chat
-    setMessages([]);
-    setCurrentSessionId(null);
-    sessionIdRef.current = null;
-    setInputEnabled(true);
-    setShowStopButton(false);
-    setIsFollowUpMode(false);
-    setIsHistoricalSession(false);
+  setMessages([]);
+  setCurrentSessionId(null);
+  sessionIdRef.current = null;
+  setInputEnabled(true);
+  setShowStopButton(false);
+  setIsFollowUpMode(false);
+  setIsHistoricalSession(false);
 
-    // Disconnect any existing connection
-    stopConnection();
+  // Reset RAG state for first query
+  setFirstQueryDone(false);
+  setShowAutomateButton(false);
+  setRagResponse(null);
+
+  // Set mode to 'automation' to start - OR consider starting with 'rag' mode if preferred
+  setMode('automation');
+
+  // Disconnect any existing connection
+  stopConnection();
   };
 
   const loadChatSessions = useCallback(async () => {
@@ -1336,6 +1398,22 @@ const SidePanel = () => {
                     className={`scrollbar-gutter-stable flex-1 overflow-x-hidden overflow-y-scroll scroll-smooth p-2 ${isDarkMode ? 'bg-slate-900/80' : ''}`}>
                     <MessageList messages={messages} isDarkMode={isDarkMode} />
                     <div ref={messagesEndRef} />
+                  </div>
+                )}
+                {isRagLoading && (
+                    <div className="flex items-center p-2 text-sky-500">
+                      <span className="animate-spin mr-2">⏳</span> RAG is loading...
+                    </div>
+                  )}
+                {/* Automate button after RAG response */}
+                {showAutomateButton && (
+                  <div className="flex justify-center my-2">
+                    <button
+                      onClick={handleAutomateTask}
+                      className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg"
+                    >
+                      🤖 Automate This Task
+                    </button>
                   </div>
                 )}
                 {messages.length > 0 && (

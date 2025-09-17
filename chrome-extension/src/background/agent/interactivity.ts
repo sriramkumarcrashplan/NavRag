@@ -1,5 +1,6 @@
 // background/agent/interactivity.ts
 import { MessageService } from "./messages/service";
+const awaitingInputMap = new Map<string, boolean>();
 
 export class Interactivity {
   private static pending: Map<string, (answer: string) => void> = new Map();
@@ -25,4 +26,5 @@ export class Interactivity {
       this.pending.delete(id);
     }
   }
+  
 }

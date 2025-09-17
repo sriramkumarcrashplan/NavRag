@@ -6,14 +6,8 @@ const packageJson = JSON.parse(fs.readFileSync('../package.json', 'utf8'));
 const isFirefox = process.env.__FIREFOX__ === 'true';
 const isOpera   = process.env.__OPERA__ === 'true';
 
-/**
- * Origins config
- * - Set env vars as comma-separated lists when building:
- *   - RAG_ORIGINS="http://127.0.0.1:5000,https://your-rag.example"
- *   - OPENAI_ORIGINS="https://api.openai.com"
- *   - GEMINI_ORIGINS="https://generativelanguage.googleapis.com"
- */
-const RAG_ORIGINS    = (process.env.RAG_ORIGINS    || 'http://127.0.0.1:5000').split(',').map(s => s.trim()).filter(Boolean);
+
+const RAG_ORIGINS    = (process.env.RAG_ORIGINS    || 'https://parablu-rag-chatbot.parablu.com').split(',').map(s => s.trim()).filter(Boolean);
 const OPENAI_ORIGINS = (process.env.OPENAI_ORIGINS || 'https://api.openai.com').split(',').map(s => s.trim()).filter(Boolean);
 const GEMINI_ORIGINS = (process.env.GEMINI_ORIGINS || 'https://generativelanguage.googleapis.com').split(',').map(s => s.trim()).filter(Boolean);
 
