@@ -22,6 +22,7 @@ const logger = createLogger('background');
 const browserContext = new BrowserContext({});
 let currentExecutor: Executor | null = null;
 let currentPort: chrome.runtime.Port | null = null;
+let eventSubscriptionActive = false;
 
 // Setup side panel behavior
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(error => console.error(error));
@@ -64,6 +65,8 @@ chrome.runtime.onConnect.addListener(port => {
     currentPort = port;
 
     port.onMessage.addListener(async message => {
+
+      const messageId = `${message.type}-${message.taskId}-${Date.now()}`;
       try {
         switch (message.type) {
           case 'heartbeat':
@@ -86,6 +89,15 @@ chrome.runtime.onConnect.addListener(port => {
             if (!message.task) return port.postMessage({ type: 'error', error: t('bg_cmd_newTask_noTask') });
             if (!message.tabId) return port.postMessage({ type: 'error', error: t('bg_errors_noTabId') });
 
+            // Check if we already have an executor running the same task
+            if (currentExecutor) {
+              const currentTaskId = await currentExecutor.getCurrentTaskId();
+              if (currentTaskId === message.taskId) {
+                logger.info('Task already running, skipping duplicate execution');
+                return;
+              }
+            }
+
             logger.info('new_task', message.tabId, message.task);
             currentExecutor = await setupExecutor(message.taskId, message.task, browserContext);
             subscribeToExecutorEvents(currentExecutor);
@@ -95,21 +107,25 @@ chrome.runtime.onConnect.addListener(port => {
             break;
           }
 
+
           case 'follow_up_task': {
             if (!message.task) return port.postMessage({ type: 'error', error: t('bg_cmd_followUpTask_noTask') });
             if (!message.tabId) return port.postMessage({ type: 'error', error: t('bg_errors_noTabId') });
 
             logger.info('follow_up_task', message.tabId, message.task);
 
-            // If executor exists, add follow-up task
             if (currentExecutor) {
+              // Check if this follow-up task is different from current task
               currentExecutor.addFollowUpTask(message.task);
-              // Re-subscribe to events in case the previous subscription was cleaned up
-              subscribeToExecutorEvents(currentExecutor);
+              
+              // Only re-subscribe if not already active
+              if (!eventSubscriptionActive) {
+                subscribeToExecutorEvents(currentExecutor);
+              }
+              
               const result = await currentExecutor.execute();
               logger.info('follow_up_task execution result', message.tabId, result);
             } else {
-              // executor was cleaned up, can not add follow-up task
               logger.info('follow_up_task: executor was cleaned up, can not add follow-up task');
               return port.postMessage({ type: 'error', error: t('bg_cmd_followUpTask_cleaned') });
             }
@@ -248,6 +264,7 @@ chrome.runtime.onConnect.addListener(port => {
       console.log('Side panel disconnected');
       currentPort = null;
       currentExecutor?.cancel();
+      eventSubscriptionActive = false;
     });
   }
 });
@@ -324,8 +341,15 @@ async function setupExecutor(taskId: string, task: string, browserContext: Brows
 
 // Update subscribeToExecutorEvents to use port
 async function subscribeToExecutorEvents(executor: Executor) {
+  // Prevent multiple subscriptions
+  if (eventSubscriptionActive) {
+    logger.info('Event subscription already active, skipping');
+    return;
+  }
+  
   // Clear previous event listeners to prevent multiple subscriptions
   executor.clearExecutionEvents();
+  eventSubscriptionActive = true;
 
   // Subscribe to new events
   executor.subscribeExecutionEvents(async event => {
@@ -343,6 +367,7 @@ async function subscribeToExecutorEvents(executor: Executor) {
       event.state === ExecutionState.TASK_CANCEL
     ) {
       await currentExecutor?.cleanup();
+      eventSubscriptionActive = false; // Reset subscription flag
     }
   });
 }

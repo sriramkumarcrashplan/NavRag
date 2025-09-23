@@ -1,7 +1,7 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { type ActionResult, AgentContext, type AgentOptions, type AgentOutput } from './types';
 import { t } from '@extension/i18n';
-import { NavigatorAgent, NavigatorActionRegistry } from './agents/navigator';
+import { NavigatorAgent, NavigatorActionRegistry, NavigatorResult } from './agents/navigator';
 import { PlannerAgent, type PlannerOutput } from './agents/planner';
 import { NavigatorPrompt } from './prompts/navigator';
 import { PlannerPrompt } from './prompts/planner';
@@ -40,6 +40,8 @@ export class Executor {
   private readonly navigatorPrompt: NavigatorPrompt;
   private readonly generalSettings: GeneralSettingsConfig | undefined;
   private tasks: string[] = [];
+  private executedTasks: Set<string> = new Set();
+  private isExecuting: boolean = false;
   
   constructor(
     task: string,
@@ -96,13 +98,39 @@ export class Executor {
   }
 
   addFollowUpTask(task: string): void {
+    // Prevent duplicate tasks
+    const taskHash = this.generateTaskHash(task);
+    if (this.executedTasks.has(taskHash)) {
+      logger.info(`Task already executed, skipping: ${task}`);
+      return;
+    }
+    
+    // Check if task is already in queue
+    if (this.tasks.includes(task)) {
+      logger.info(`Task already in queue, skipping: ${task}`);
+      return;
+    }
+    
     this.tasks.push(task);
     this.context.messageManager.addNewTask(task);
-
-    // need to reset previous action results that are not included in memory
     this.context.actionResults = this.context.actionResults.filter(result => result.includeInMemory);
   }
-
+  
+  private generateTaskHash(task: string): string {
+  const normalizedTask = task.toLowerCase().trim();
+  let hash = 0;
+  
+  if (normalizedTask.length === 0) return '0';
+  
+  for (let i = 0; i < normalizedTask.length; i++) {
+    const char = normalizedTask.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  
+  return Math.abs(hash).toString(36);
+}
+  
   /**
    * Helper method to run planner and store its output
    */
@@ -156,106 +184,145 @@ export class Executor {
    *
    * @returns {Promise<void>}
    */
-  async execute(): Promise<void> {
-    logger.info(`🚀 Executing task: ${this.tasks[this.tasks.length - 1]}`);
-    // reset the step counter
-    const context = this.context;
-    context.nSteps = 0;
-    const allowedMaxSteps = this.context.options.maxSteps;
-
+  async execute(): Promise<AgentOutput<NavigatorResult>> {
+    // Prevent concurrent executions
+    if (this.isExecuting) {
+      logger.info('Execution already in progress, skipping');
+      return { id: 'executor', result: { done: true } };
+    }
+    
+    this.isExecuting = true;
+    
     try {
-      this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_START, this.context.taskId);
-
-      let step = 0;
-      let latestPlanOutput: AgentOutput<PlannerOutput> | null = null;
-      let navigatorDone = false;
-      let taskCompleted = false;
-
-      for (step = 0; step < allowedMaxSteps; step++) {
-        context.stepInfo = {
-          stepNumber: context.nSteps,
-          maxSteps: context.options.maxSteps,
-        };
-
-        logger.info(`🔄 Step ${step + 1} / ${allowedMaxSteps}`);
-        if (await this.shouldStop()) {
-          break;
-        }
-
+      const currentTask = this.tasks[this.tasks.length - 1];
+      const taskHash = this.generateTaskHash(currentTask);
+      
+      // Check if task was already executed
+      if (this.executedTasks.has(taskHash)) {
+        logger.info('Task already executed, returning previous result');
+        return { id: 'executor', result: { done: true } };
+      }
+      
+      logger.info(`🚀 Executing task: ${currentTask}`);
+      this.context.nSteps = 0;
+      
+      // Mark task as being executed
+      this.executedTasks.add(taskHash);
+      
+      // Rest of execute method...
+      const allowedMaxSteps = this.context.options.maxSteps;
+      
+      try {
+        this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_START, this.context.taskId);
+        
+        // Check completion at start
         if (this.isTaskAlreadyCompleted()) {
-        logger.info('✅ Task already completed, skipping execution');
-        taskCompleted = true;
-        break;
+          logger.info('✅ Task already completed at start');
+          this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_OK, 
+            this.context.finalAnswer || this.context.taskId);
+          return { id: 'executor', result: { done: true } };
         }
-
-        // Run planner periodically for guidance
-        if (this.planner && (context.nSteps % context.options.planningInterval === 0 || navigatorDone)) {
-          navigatorDone = false;
-          latestPlanOutput = await this.runPlanner();
-
-          // Check if task is complete after planner run
-          if (this.checkTaskCompletion(latestPlanOutput)) {
+        
+        let step = 0;
+        let latestPlanOutput: AgentOutput<any> | null = null;
+        let navigatorDone = false;
+        
+        for (step = 0; step < allowedMaxSteps; step++) {
+          this.context.stepInfo = {
+            stepNumber: this.context.nSteps,
+            maxSteps: this.context.options.maxSteps,
+          };
+          
+          logger.info(`🔄 Step ${step + 1} / ${allowedMaxSteps}`);
+          
+          if (await this.shouldStop()) break;
+          
+          // Double-check completion before each step
+          if (this.isTaskAlreadyCompleted()) {
+            logger.info('✅ Task completed during execution');
             break;
           }
+          
+          // Run planner periodically
+          if (this.planner && (this.context.nSteps % this.context.options.planningInterval === 0 || navigatorDone)) {
+            navigatorDone = false;
+            latestPlanOutput = await this.runPlanner();
+            
+            if (this.checkTaskCompletion(latestPlanOutput)) {
+              break;
+            }
+          }
+          
+          // Execute navigator
+          navigatorDone = await this.navigate();
+          
+          if (navigatorDone) {
+            logger.info('🔄 Navigator indicates completion');
+          }
         }
-
-        // Execute navigator
-        navigatorDone = await this.navigate();
-
-        // If navigator indicates completion, the next periodic planner run will validate it
-        if (navigatorDone) {
-          logger.info('🔄 Navigator indicates completion - will be validated by next planner run');
+        
+        // Determine final result
+        const isCompleted = latestPlanOutput?.result?.done === true;
+        
+        if (isCompleted) {
+          const finalMessage = this.context.finalAnswer || this.context.taskId;
+          this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_OK, finalMessage);
+          return { id: 'executor', result: { done: true } };
+        } else if (step >= allowedMaxSteps) {
+          logger.error('❌ Task failed: Max steps reached');
+          this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_FAIL, t('exec_errors_maxStepsReached'));
+          return { id: 'executor', error: 'Max steps reached' };
+        } else if (this.context.stopped) {
+          this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_CANCEL, t('exec_task_cancel'));
+          return { id: 'executor', result: { done: false } };
+        } else {
+          this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_PAUSE, t('exec_task_pause'));
+          return { id: 'executor', result: { done: false } };
+        }
+        
+      } catch (error) {
+        // Remove from executed set if execution failed
+        this.executedTasks.delete(taskHash);
+        
+        if (error instanceof RequestCancelledError) {
+          this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_CANCEL, t('exec_task_cancel'));
+        } else {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_FAIL, t('exec_task_fail', [errorMessage]));
+        }
+        throw error;
+      } finally {
+        // Store history logic...
+        if (import.meta.env.DEV) {
+          logger.debug('Executor history', JSON.stringify(this.context.history, null, 2));
+        }
+        
+        if (this.generalSettings?.replayHistoricalTasks) {
+          const historyString = JSON.stringify(this.context.history);
+          logger.info(`Executor history size: ${historyString.length}`);
+          await chatHistoryStore.storeAgentStepHistory(this.context.taskId, this.tasks[0], historyString);
         }
       }
-
-      // Determine task completion status
-      const isCompleted = latestPlanOutput?.result?.done === true;
-
-      if (isCompleted) {
-        // Emit final answer if available, otherwise use task ID
-        const finalMessage = this.context.finalAnswer || this.context.taskId;
-        this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_OK, finalMessage);
-      } else if (step >= allowedMaxSteps) {
-        logger.error('❌ Task failed: Max steps reached');
-        this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_FAIL, t('exec_errors_maxStepsReached'));
-      } else if (this.context.stopped) {
-        this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_CANCEL, t('exec_task_cancel'));
-      } else {
-        this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_PAUSE, t('exec_task_pause'));
-      }
-    } catch (error) {
-      if (error instanceof RequestCancelledError) {
-        this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_CANCEL, t('exec_task_cancel'));
-      } else {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_FAIL, t('exec_task_fail', [errorMessage]));
-      }
+      
     } finally {
-      if (import.meta.env.DEV) {
-        logger.debug('Executor history', JSON.stringify(this.context.history, null, 2));
-      }
-      // store the history only if replay is enabled
-      if (this.generalSettings?.replayHistoricalTasks) {
-        const historyString = JSON.stringify(this.context.history);
-        logger.info(`Executor history size: ${historyString.length}`);
-        await chatHistoryStore.storeAgentStepHistory(this.context.taskId, this.tasks[0], historyString);
-      } else {
-        logger.info('Replay historical tasks is disabled, skipping history storage');
-      }
+      this.isExecuting = false;
     }
   }
 
+
   private isTaskAlreadyCompleted(): boolean {
-  // Check if we have action results indicating completion
-  const hasCompletionResult = this.context.actionResults.some(result => 
-    result.isDone || 
-    (result.extractedContent && result.extractedContent.includes('already completed'))
-  );
-  
-  // Check if final answer was already set
-  const hasFinalAnswer = !!this.context.finalAnswer;
-  
-  return hasCompletionResult || hasFinalAnswer;
+    // Enhanced completion check
+    const hasCompletionResult = this.context.actionResults.some(result => 
+      result.isDone || 
+      (result.extractedContent && result.extractedContent.toLowerCase().includes('complete')) ||
+      (result.extractedContent && result.extractedContent.toLowerCase().includes('finished')) ||
+      (result.extractedContent && result.extractedContent.toLowerCase().includes('done'))
+    );
+    
+    const hasFinalAnswer = !!this.context.finalAnswer;
+    const isMarkedComplete = this.context.taskCompleted;
+    
+    return hasCompletionResult || hasFinalAnswer || isMarkedComplete;
   }
 
   private async navigate(): Promise<boolean> {

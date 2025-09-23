@@ -14,6 +14,7 @@ export class MessageManagerSettings {
   messageContext?: string;
   sensitiveData?: Record<string, string>;
   availableFilePaths?: string[];
+  
 
   constructor(
     options: {
@@ -41,11 +42,16 @@ export default class MessageManager {
   private history: MessageHistory;
   private toolId: number;
   private settings: MessageManagerSettings;
+  private addedTasks: Set<string> = new Set(); // Track added tasks
+  private messageHashes: Set<string> = new Set();
+  
 
   constructor(settings: MessageManagerSettings = new MessageManagerSettings()) {
     this.settings = settings;
     this.history = new MessageHistory();
     this.toolId = 1;
+    this.addedTasks = new Set(); // Initialize here too
+    this.messageHashes = new Set(); // Initialize here
   }
 
   public initTaskMessages(systemMessage: SystemMessage, task: string, messageContext?: string): void {
@@ -145,10 +151,20 @@ export default class MessageManager {
   }
 
   public addNewTask(newTask: string): void {
-    const content = `Your new ultimate task is: """${newTask}""". This is a follow-up of the previous tasks. Make sure to take all of the previous context into account and finish your new ultimate task.`;
-    const wrappedContent = wrapUserRequest(content);
-    const msg = new HumanMessage({ content: wrappedContent });
-    this.addMessageWithTokens(msg);
+  // Generate task hash safely
+  const taskHash = this.generateSafeHash(newTask.toLowerCase().trim());
+  
+  if (this.addedTasks.has(taskHash)) {
+    logger.info('Duplicate task detected, skipping:', newTask);
+    return;
+  }
+  
+  this.addedTasks.add(taskHash);
+  
+  const content = `Your new ultimate task is: """${newTask}""". This is a follow-up of the previous tasks. Make sure to take all of the previous context into account and finish your new ultimate task.`;
+  const wrappedContent = wrapUserRequest(content);
+  const msg = new HumanMessage({ content: wrappedContent });
+  this.addMessageWithTokens(msg);
   }
 
   public addPlan(plan?: string, position?: number): void {
@@ -214,14 +230,51 @@ export default class MessageManager {
   }
 
   public addMessageWithTokens(message: BaseMessage, messageType?: string | null, position?: number): void {
-    let filteredMessage = message;
-    if (this.settings.sensitiveData) {
-      filteredMessage = this._filterSensitiveData(message);
-    }
+  let filteredMessage = message;
+  if (this.settings.sensitiveData) {
+    filteredMessage = this._filterSensitiveData(message);
+  }
 
-    const tokenCount = this._countTokens(filteredMessage);
-    const metadata: MessageMetadata = new MessageMetadata(tokenCount, messageType);
-    this.history.addMessage(filteredMessage, metadata, position);
+  // Generate message hash safely without btoa
+  const messageContent = typeof filteredMessage.content === 'string' 
+    ? filteredMessage.content 
+    : JSON.stringify(filteredMessage.content);
+  
+  // Use a safe hash function instead of btoa
+  const messageHash = this.generateSafeHash(messageContent);
+  
+  // Check for duplicates using the safe hash
+  if (this.messageHashes && this.messageHashes.has(messageHash)) {
+    logger.debug('Duplicate message detected, skipping');
+    return;
+  }
+  
+  // Add to hash set if it exists
+  if (this.messageHashes) {
+    this.messageHashes.add(messageHash);
+  }
+
+  const tokenCount = this._countTokens(filteredMessage);
+  const metadata: MessageMetadata = new MessageMetadata(tokenCount, messageType);
+  this.history.addMessage(filteredMessage, metadata, position);
+  }
+
+  private generateSafeHash(content: string): string {
+  let hash = 0;
+  if (content.length === 0) return hash.toString();
+  
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  
+  return Math.abs(hash).toString(36);
+  }
+
+  public clearTaskHistory(): void {
+    this.addedTasks.clear();
+    this.messageHashes.clear();
   }
 
   private _filterSensitiveData(message: BaseMessage): BaseMessage {
@@ -343,9 +396,21 @@ export default class MessageManager {
 
 export class MessageService {
   private static messageManager = new MessageManager(new MessageManagerSettings());
-
+  private static processedMessages: Set<string> = new Set();
+  
   static init() {
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      // Generate message ID for deduplication
+      const msgId = `${msg.type}-${JSON.stringify(msg)}`;
+      const msgHash = btoa(msgId).replace(/[^a-zA-Z0-9]/g, '');
+      
+      if (this.processedMessages.has(msgHash)) {
+        logger.info('Duplicate message detected, ignoring');
+        return;
+      }
+      
+      this.processedMessages.add(msgHash);
+      
       if (msg.type === "user-response") {
         Interactivity.handleUserResponse(msg.id, msg.answer);
         this.messageManager.addMessageWithTokens(new HumanMessage({ content: msg.answer }));

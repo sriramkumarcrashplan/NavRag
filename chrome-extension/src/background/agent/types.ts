@@ -59,6 +59,7 @@ export class AgentContext {
   waitingForUserInput?: UserInputWaitState;
   taskCompleted: boolean = false; // ← Add this
   lastTaskId: string | null = null;
+  executionStartTime: number | null = null;
 
   constructor(
     taskId: string,
@@ -92,7 +93,18 @@ export class AgentContext {
   
   // ← Add this method  
   isNewTask(taskId: string): boolean {
-    return this.lastTaskId !== taskId;
+    const isNew = this.lastTaskId !== taskId;
+    if (isNew) {
+      this.lastTaskId = taskId;
+      this.taskCompleted = false; // Reset completion status for new tasks
+      this.executionStartTime = Date.now();
+    }
+    return isNew;
+  }
+
+  isTaskStale(maxAge: number = 300000): boolean { // 5 minutes default
+    if (!this.executionStartTime) return false;
+    return (Date.now() - this.executionStartTime) > maxAge;
   }
 
   async emitEvent(actor: Actors, state: ExecutionState, eventDetails: string) {
@@ -120,7 +132,7 @@ export class AgentContext {
 
   async handleUserResponse(response: string) {
     if (this.waitingForUserInput) { 
-      // Add the user's response to action results for the agent to use
+      // Add the user's response to action results
       this.actionResults.push(new ActionResult({
         extractedContent: `User provided: ${response}`,
         includeInMemory: true,
@@ -134,6 +146,8 @@ export class AgentContext {
     }
   }
 }
+
+
 
 export class AgentStepInfo {
   stepNumber: number;
