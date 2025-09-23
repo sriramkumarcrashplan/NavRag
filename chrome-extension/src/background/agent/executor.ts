@@ -255,6 +255,25 @@ export class Executor {
           
           // Execute navigator
           navigatorDone = await this.navigate();
+
+      // ─▶ Immediately run planner on navigatorDone
+      if (navigatorDone) {
+        logger.info('🔄 Navigator indicates completion — validating with planner');
+        latestPlanOutput = await this.runPlanner();
+        if (this.checkTaskCompletion(latestPlanOutput)) {
+          logger.info('✅ Planner confirms task completion after navigator done');
+          this.context.markTaskCompleted();
+          await this.context.emitEvent(
+            Actors.SYSTEM,
+            ExecutionState.TASK_OK,
+            this.context.finalAnswer || this.context.taskId
+          );
+          return { id: this.context.taskId, result: { done: true } };
+        } else {
+          logger.info('⚠️ Planner did not confirm completion yet, continuing');
+          navigatorDone = false; // reset and continue loop
+        }
+        } 
           
           if (navigatorDone) {
             logger.info('🔄 Navigator indicates completion');
