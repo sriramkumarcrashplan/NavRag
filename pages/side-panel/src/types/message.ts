@@ -24,6 +24,11 @@ export const ACTOR_PROFILES = {
     icon: 'icons/validator.svg',
     iconBackground: '#EC407A',
   },
+  rag: {
+    name: 'RAG',
+    icon: 'icons/user.svg',
+    iconBackground: '#6366F1', // Indigo color for RAG
+  },
   manager: {
     name: 'Manager',
     icon: 'icons/manager.svg',

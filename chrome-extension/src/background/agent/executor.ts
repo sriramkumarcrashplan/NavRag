@@ -287,7 +287,7 @@ export class Executor {
           const finalMessage = this.context.finalAnswer || this.context.taskId;
           this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_OK, finalMessage);
           return { id: 'executor', result: { done: true } };
-        } else if (step >= allowedMaxSteps) {
+        } else if (step >= allowedMaxSteps) { 
           logger.error('❌ Task failed: Max steps reached');
           this.context.emitEvent(Actors.SYSTEM, ExecutionState.TASK_FAIL, t('exec_errors_maxStepsReached'));
           return { id: 'executor', error: 'Max steps reached' };

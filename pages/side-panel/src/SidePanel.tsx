@@ -11,7 +11,7 @@ import ChatHistoryList from './components/ChatHistoryList';
 import BookmarkList from './components/BookmarkList';
 import { EventType, type AgentEvent, ExecutionState } from './types/event';
 import './SidePanel.css';
-import { ragNewSession, ragAsk, ragHistory } from './ragClient';
+import { ragNewSession, ragAsk, ragHistory, ragAskWithEvents  } from './ragClient';
 
 // Declare chrome API types
 declare global {
@@ -675,35 +675,49 @@ useEffect(() => {
 
   const handleSendMessage = async (text: string) => {
   console.log('handleSendMessage', text);
-
   const trimmedText = text.trim();
   if (!trimmedText) return;
 
-  if (!firstQueryDone && ragSessionId) {
+  // For automation mode: Always query RAG first, then show automate button
+  if (mode === 'automation' && !firstQueryDone && ragSessionId) {
     setIsRagLoading(true);
-    // Step 1: RAG Query Only
-    const ragResult = await ragAsk(ragSessionId, trimmedText);
-    setIsRagLoading(false);
     
-    // Display RAG response
+    // Add user message first
     appendMessage({
-      actor: Actors.NAVIGATOR,
-      content: ragResult.answer + formatSources(ragResult.sources),
+      actor: Actors.USER,
+      content: trimmedText,
       timestamp: Date.now(),
     });
     
-    // Show "Automate" button for this response
+    // Step 1: RAG Query Only  
+    const ragResult = await ragAskWithEvents(ragSessionId, trimmedText, (event) => {
+      // Add RAG messages to chat like other agents
+      appendMessage({
+        actor: event.actor,
+        content: event.content,
+        timestamp: event.timestamp,
+      });
+    });
+    
+    setIsRagLoading(false);
+      
+    // Show "Automate" button for this response  
     setShowAutomateButton(true);
     setRagResponse({ originalQuery: trimmedText, answer: ragResult.answer, sources: ragResult.sources });
     setFirstQueryDone(true);
     return;
   }
 
+  // For RAG mode: Direct RAG query
+  if (mode === 'rag') {
+    return await handleSendMessageRAG(text);
+  }
 
-  // Check if we're responding to an agent's question
+  // Rest of your existing automation logic for follow-up queries...
+  // Check if we're responding to an agent's question  
   if (waitingForUserInput) {
     try {
-      // Send user response to background script
+      // Send user response to background script  
       if (portRef.current) {
         portRef.current.postMessage({
           type: 'user_response',
@@ -711,21 +725,18 @@ useEffect(() => {
           taskId: sessionIdRef.current,
         });
       }
-
-      // Add user message to chat
+      // Add user message to chat  
       const userMessage = {
         actor: Actors.USER,
         content: trimmedText,
         timestamp: Date.now(),
       };
       appendMessage(userMessage, sessionIdRef.current);
-
-      // Clear waiting state and show that we're processing
+      // Clear waiting state and show that we're processing  
       setWaitingForUserInput(null);
       setInputEnabled(false);
       setShowStopButton(true);
-
-      return; // Don't proceed with normal task handling
+      return; // Don't proceed with normal task handling  
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       console.error('Failed to send user response:', err);
@@ -734,58 +745,54 @@ useEffect(() => {
         content: `Failed to send response: ${errorMessage}`,
         timestamp: Date.now(),
       });
-
     }
     return;
   }
-
-  // Handle commands that start with /
+  
+  // Handle commands that start with /  
   if (trimmedText.startsWith('/')) {
     const wasHandled = await handleCommand(trimmedText);
     if (wasHandled) return;
   }
-
-  // Block sending messages in historical sessions
+  
+  // Block sending messages in historical sessions  
   if (isHistoricalSession) {
     console.log('Cannot send messages in historical sessions');
     return;
   }
-
-  // Rest of the existing handleSendMessage logic...
+  
+  // Rest of the existing handleSendMessage logic for automation...
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tabs[0]?.id;
     if (!tabId) {
       throw new Error('No active tab found');
     }
-
     setInputEnabled(false);
     setShowStopButton(true);
-
-    // Create a new chat session for this task if not in follow-up mode
+    
+    // Create a new chat session for this task if not in follow-up mode  
     if (!isFollowUpMode) {
       const newSession = await chatHistoryStore.createSession(
         text.substring(0, 50) + (text.length > 50 ? '...' : ''),
       );
       console.log('newSession', newSession);
-
       const sessionId = newSession.id;
       setCurrentSessionId(sessionId);
       sessionIdRef.current = sessionId;
     }
-
+    
     const userMessage = {
       actor: Actors.USER,
       content: text,
       timestamp: Date.now(),
     };
-
     appendMessage(userMessage, sessionIdRef.current);
-
+    
     if (!portRef.current) {
       setupConnection();
     }
-
+    
     if (isFollowUpMode) {
       await sendMessage({
         type: 'follow_up_task',
@@ -817,6 +824,7 @@ useEffect(() => {
   }
   };
 
+
   // NEW: RAG send
   const handleSendMessageRAG = async (text: string) => {
   const q = text.trim();
@@ -826,22 +834,20 @@ useEffect(() => {
 
   try {
     setInputEnabled(false);
-    const { answer, sources } = await ragAsk(ragSessionId, q);
-
-    const safeAnswer = (answer ?? "").toString();
-    const prettySources =
-      Array.isArray(sources) && sources.length
-        ? `\n\nSources:\n` +
-          sources
-            .map((s, i) => `• ${s.file_path || s.title || s.id || `source ${i + 1}`}${typeof s.score === 'number' ? ` (score: ${s.score.toFixed(3)})` : ''}`)
-            .join('\n')
-        : "";
-
-    appendMessage({
-      actor: Actors.NAVIGATOR, // reuse your assistant style
-      content: safeAnswer + prettySources,
-      timestamp: Date.now(),
+    const response = await ragAskWithEvents(ragSessionId, q, (event) => {
+      // Wrap RAGEvent as AgentEvent for compatibility
+      appendMessage({
+        actor: event.actor,
+        content: event.content,
+        timestamp: event.timestamp,
+      });
     });
+    const prettySources = response.sources && response.sources.length
+      ? `\n\nSources:\n` +
+        response.sources
+          .map((s, i) => `• ${s.file_path || s.title || s.id || `source ${i + 1}`}${typeof s.score === 'number' ? ` (score: ${s.score.toFixed(3)})` : ''}`)
+          .join('\n')
+      : "";
   } catch (e: any) {
     appendMessage({
       actor: Actors.SYSTEM,
@@ -861,6 +867,41 @@ useEffect(() => {
     // Reuse handleSendMessage to start automation
     await handleSendMessage(ragResponse.originalQuery!);
   };
+
+  const renderModeToggle = () => (
+  <div className={`flex items-center justify-center p-2 border-b ${isDarkMode ? 'border-slate-700 bg-slate-800' : 'border-gray-200 bg-white'}`}>
+    <div className={`flex rounded-lg p-1 ${isDarkMode ? 'bg-slate-700' : 'bg-gray-100'}`}>
+      <button
+        onClick={() => setMode('automation')}
+        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+          mode === 'automation'
+            ? isDarkMode 
+              ? 'bg-blue-600 text-white' 
+              : 'bg-blue-500 text-white'
+            : isDarkMode
+              ? 'text-gray-300 hover:text-white hover:bg-slate-600'
+              : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
+        }`}
+      >
+        🤖 Automation
+      </button>
+      <button
+        onClick={() => setMode('rag')}
+        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${
+          mode === 'rag'
+            ? isDarkMode
+              ? 'bg-indigo-600 text-white'
+              : 'bg-indigo-500 text-white'
+            : isDarkMode
+              ? 'text-gray-300 hover:text-white hover:bg-slate-600'
+              : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200'
+        }`}
+      >
+        📚 RAG
+      </button>
+    </div>
+  </div>
+  );
 
   type RAGSource = { file_path?: string; title?: string; id?: string; score?: number };
   function formatSources(sources?: RAGSource[]): string {
@@ -1237,194 +1278,224 @@ useEffect(() => {
   };
 
   return (
-    <div>
-      <div
-        className={`flex h-screen flex-col ${isDarkMode ? 'bg-slate-900' : "bg-[url('/bg.jpg')] bg-cover bg-no-repeat"} overflow-hidden border ${isDarkMode ? 'border-sky-800' : 'border-[rgb(186,230,253)]'} rounded-2xl`}>
-        <header className="header relative">
-          <div className="header-logo">
-            {showHistory ? (
-              <button
-                type="button"
-                onClick={() => handleBackToChat(false)}
-                className={`${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-400 hover:text-sky-500'} cursor-pointer`}
-                aria-label="Back to chat">
-                ← Back
-              </button>
-            ) : (
-              <img src="/icon-654x128.png" alt="Extension Logo" className="w-40 h-auto object-contain" />
-            )}
-          </div>
-          <div className="header-icons">
-            {!showHistory && (
-              <>
-                <button
-                  type="button"
-                  onClick={handleNewChat}
-                  onKeyDown={e => e.key === 'Enter' && handleNewChat()}
-                  className={`header-icon ${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-400 hover:text-sky-500'} cursor-pointer`}
-                  aria-label="New Chat"
-                  tabIndex={0}>
-                  <PiPlusBold size={20} />
-                </button>
-                <button
-                  type="button"
-                  onClick={handleLoadHistory}
-                  onKeyDown={e => e.key === 'Enter' && handleLoadHistory()}
-                  className={`header-icon ${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-400 hover:text-sky-500'} cursor-pointer`}
-                  aria-label="Load History"
-                  tabIndex={0}>
-                  <GrHistory size={20} />
-                </button>
-              </>
-            )}
-            <div className="mr-2 rounded-xl border px-1 py-0.5">
-              <button
-                className={`px-2 py-1 text-sm rounded-lg ${mode==='automation' ? (isDarkMode ? 'bg-sky-700 text-white' : 'bg-sky-500 text-white') : ''}`}
-                onClick={() => setMode('automation')}
-              >
-                Automation
-              </button>
-              <button
-                className={`ml-1 px-2 py-1 text-sm rounded-lg ${mode==='rag' ? (isDarkMode ? 'bg-sky-700 text-white' : 'bg-sky-500 text-white') : ''}`}
-                onClick={() => setMode('rag')}
-              >
-                RAG
-              </button>
-            </div>
+  <div>
+    <div
+      className={`flex h-screen flex-col ${isDarkMode ? 'bg-slate-900' : "bg-[url('/bg.jpg')] bg-cover bg-no-repeat"} overflow-hidden border ${isDarkMode ? 'border-sky-800' : 'border-[rgb(186,230,253)]'} rounded-2xl`}>
+      <header className="header relative">
+        <div className="header-logo">
+          {showHistory ? (
             <button
               type="button"
-              onClick={() => chrome.runtime.openOptionsPage()}
-              onKeyDown={e => e.key === 'Enter' && chrome.runtime.openOptionsPage()}
-              className={`header-icon ${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-400 hover:text-sky-500'} cursor-pointer`}
-              aria-label="Settings"
-              tabIndex={0}>
-              <FiSettings size={20} />
+              onClick={() => handleBackToChat(false)}
+              className={`${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-400 hover:text-sky-500'} cursor-pointer`}
+              aria-label="Back to chat">
+              ← Back
+            </button>
+          ) : (
+            <img src="/icon-654x128.png" alt="Extension Logo" className="w-40 h-auto object-contain" />
+          )}
+        </div>
+        <div className="header-icons">
+          {!showHistory && (
+            <>
+              <button
+                type="button"
+                onClick={handleNewChat}
+                onKeyDown={e => e.key === 'Enter' && handleNewChat()}
+                className={`header-icon ${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-400 hover:text-sky-500'} cursor-pointer`}
+                aria-label="New Chat"
+                tabIndex={0}>
+                <PiPlusBold size={20} />
+              </button>
+              <button
+                type="button"
+                onClick={handleLoadHistory}
+                onKeyDown={e => e.key === 'Enter' && handleLoadHistory()}
+                className={`header-icon ${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-400 hover:text-sky-500'} cursor-pointer`}
+                aria-label="Load History"
+                tabIndex={0}>
+                <GrHistory size={20} />
+              </button>
+            </>
+          )}
+          
+          {/* Compact Switch Toggle */}
+          <div className={`mr-2 relative inline-flex h-6 w-20 items-center rounded-full transition-colors ${
+            mode === 'rag' ? 'bg-indigo-600' : 'bg-blue-600'
+          }`}>
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              mode === 'rag' ? 'translate-x-14' : 'translate-x-1'
+            }`} />
+            <button
+              onClick={() => setMode('automation')}
+              className={`absolute left-0 top-0 h-full w-10 rounded-l-full text-xs font-medium transition-colors ${
+                mode === 'automation' ? 'text-white' : 'text-white/70'
+              }`}>
+              🤖
+            </button>
+            <button
+              onClick={() => setMode('rag')}
+              className={`absolute right-0 top-0 h-full w-10 rounded-r-full text-xs font-medium transition-colors ${
+                mode === 'rag' ? 'text-white' : 'text-white/70'
+              }`}>
+              📚
             </button>
           </div>
-        </header>
-        {showHistory ? (
-          <div className="flex-1 overflow-hidden">
-            <ChatHistoryList
-              sessions={chatSessions}
-              onSessionSelect={handleSessionSelect}
-              onSessionDelete={handleSessionDelete}
-              onSessionBookmark={handleSessionBookmark}
-              visible={true}
-              isDarkMode={isDarkMode}
-            />
-          </div>
-        ) : (
-          <>
-            {/* Show loading state while checking model configuration */}
-            {hasConfiguredModels === null && (
-              <div
-                className={`flex flex-1 items-center justify-center p-8 ${isDarkMode ? 'text-sky-300' : 'text-sky-600'}`}>
-                <div className="text-center">
-                  <div className="mx-auto mb-4 size-8 animate-spin rounded-full border-2 border-sky-400 border-t-transparent"></div>
-                  <p>Checking configuration...</p>
+
+          <button
+            type="button"
+            onClick={() => chrome.runtime.openOptionsPage()}
+            onKeyDown={e => e.key === 'Enter' && chrome.runtime.openOptionsPage()}
+            className={`header-icon ${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-400 hover:text-sky-500'} cursor-pointer`}
+            aria-label="Settings"
+            tabIndex={0}>
+            <FiSettings size={20} />
+          </button>
+        </div>
+      </header>
+      
+      {showHistory ? (
+        <div className="flex-1 overflow-hidden">
+          <ChatHistoryList
+            sessions={chatSessions}
+            onSessionSelect={handleSessionSelect}
+            onSessionDelete={handleSessionDelete}
+            onSessionBookmark={handleSessionBookmark}
+            visible={true}
+            isDarkMode={isDarkMode}
+          />
+        </div>
+      ) : (
+        <>
+          {/* Show loading state while checking model configuration */}
+          {hasConfiguredModels === null && (
+            <div
+              className={`flex flex-1 items-center justify-center p-8 ${isDarkMode ? 'text-sky-300' : 'text-sky-600'}`}>
+              <div className="text-center">
+                <div className="mx-auto mb-4 size-8 animate-spin rounded-full border-2 border-sky-400 border-t-transparent"></div>
+                <p>Checking configuration...</p>
+              </div>
+            </div>
+          )}
+
+          {/* Show setup message when no models are configured */}
+          {hasConfiguredModels === false && (
+            <div
+              className={`flex flex-1 items-center justify-center p-8 ${isDarkMode ? 'text-sky-300' : 'text-sky-600'}`}>
+              <div className="max-w-md text-center">
+                <img
+                  src="/icon-654x128.png"
+                  alt="Nanobrowser Logo"
+                  className="mx-auto mb-4 w-48 h-auto object-contain"
+                />
+                <h3 className={`mb-2 text-lg font-semibold ${isDarkMode ? 'text-sky-200' : 'text-sky-700'}`}>
+                  Welcome to CrashPlan Navigator!
+                </h3>
+                <p className="mb-4">To get started, please configure your API keys in the settings page.</p>
+                <button
+                  onClick={() => chrome.runtime.openOptionsPage()}
+                  className={`my-4 rounded-lg px-4 py-2 font-medium transition-colors ${
+                    isDarkMode ? 'bg-sky-600 text-white hover:bg-sky-700' : 'bg-sky-500 text-white hover:bg-sky-600'
+                  }`}>
+                  Open Settings
+                </button>
+                <div className="mt-4 text-sm opacity-75">
+                  <a
+                    href="https://github.com/nanobrowser/nanobrowser?tab=readme-ov-file#-quick-start"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-700 hover:text-sky-600'}`}>
+                    Quick Start Guide
+                  </a>
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Show setup message when no models are configured */}
-            {hasConfiguredModels === false && (
-              <div
-                className={`flex flex-1 items-center justify-center p-8 ${isDarkMode ? 'text-sky-300' : 'text-sky-600'}`}>
-                <div className="max-w-md text-center">
-                  <img
-                    src="/icon-654x128.png"
-                    alt="Nanobrowser Logo"
-                    className="mx-auto mb-4 w-48 h-auto object-contain"
-                  />
-                  <h3 className={`mb-2 text-lg font-semibold ${isDarkMode ? 'text-sky-200' : 'text-sky-700'}`}>
-                    Welcome to CrashPlan Navigator!
-                  </h3>
-                  <p className="mb-4">To get started, please configure your API keys in the settings page.</p>
+          {/* Show normal chat interface when models are configured */}
+          {hasConfiguredModels === true && (
+            <>
+              {messages.length === 0 && (
+                <>
+                  <div
+                    className={`border-t ${isDarkMode ? 'border-sky-900' : 'border-sky-100'} mb-2 p-2 shadow-sm backdrop-blur-sm`}>
+                    <ChatInput
+                      onSendMessage={handleSendMessage} // Always use main handler 
+                      onStopTask={handleStopTask}                 
+                      onMicClick={mode === 'rag' ? undefined : handleMicClick}                 
+                      isRecording={mode === 'rag' ? false : isRecording}
+                      isProcessingSpeech={mode === 'rag' ? false : isProcessingSpeech}
+                      disabled={!inputEnabled || (mode!=='rag' && isHistoricalSession)}
+                      showStopButton={mode!=='rag' && showStopButton}
+                      setContent={(setter) => { setInputTextRef.current = setter; }}
+                      isDarkMode={isDarkMode}
+                      historicalSessionId={(mode!=='rag' && isHistoricalSession && replayEnabled) ? currentSessionId : null}
+                      onReplay={mode==='rag' ? undefined : handleReplay}
+                    />
+                  </div>
+                  <div className="flex-1 overflow-y-auto">
+                    <BookmarkList
+                      bookmarks={favoritePrompts}
+                      onBookmarkSelect={handleBookmarkSelect}
+                      onBookmarkUpdateTitle={handleBookmarkUpdateTitle}
+                      onBookmarkDelete={handleBookmarkDelete}
+                      onBookmarkReorder={handleBookmarkReorder}
+                      isDarkMode={isDarkMode}
+                    />
+                  </div>
+                </>
+              )}
+              
+              {messages.length > 0 && (
+                <div
+                  className={`scrollbar-gutter-stable flex-1 overflow-x-hidden overflow-y-scroll scroll-smooth p-2 ${isDarkMode ? 'bg-slate-900/80' : ''}`}>
+                  <MessageList messages={messages} isDarkMode={isDarkMode} />
+                  <div ref={messagesEndRef} />
+                </div>
+              )}
+              
+              {/* RAG Loading Indicator */}
+              {isRagLoading && (
+                <div className={`flex items-center justify-center p-3 ${isDarkMode ? 'bg-slate-800/50' : 'bg-blue-50/50'} border-t ${isDarkMode ? 'border-slate-700' : 'border-blue-200'}`}>
+                  <div className="flex items-center gap-2">
+                    <div className="animate-spin">
+                      <svg className="w-4 h-4 text-indigo-500" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                    </div>
+                    <span className={`text-sm font-medium ${isDarkMode ? 'text-indigo-300' : 'text-indigo-600'}`}>
+                      📚 RAG is processing your query...
+                    </span>
+                  </div>
+                </div>
+              )}
+              
+              {/* Automate button after RAG response */}
+              {showAutomateButton && (
+                <div className={`flex justify-center p-3 ${isDarkMode ? 'bg-slate-800/30' : 'bg-gray-50/30'} border-t ${isDarkMode ? 'border-slate-700' : 'border-gray-200'}`}>
                   <button
-                    onClick={() => chrome.runtime.openOptionsPage()}
-                    className={`my-4 rounded-lg px-4 py-2 font-medium transition-colors ${
-                      isDarkMode ? 'bg-sky-600 text-white hover:bg-sky-700' : 'bg-sky-500 text-white hover:bg-sky-600'
-                    }`}>
-                    Open Settings
+                    onClick={handleAutomateTask}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
+                      isDarkMode 
+                        ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                        : 'bg-blue-500 hover:bg-blue-600 text-white'
+                    }`}
+                  >
+                    🤖 Automate This Task
                   </button>
-                  <div className="mt-4 text-sm opacity-75">
-                    <a
-                      href="https://github.com/nanobrowser/nanobrowser?tab=readme-ov-file#-quick-start"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={`${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-700 hover:text-sky-600'}`}>
-                      Quick Start Guide
-                    </a>
-                  </div>
                 </div>
-              </div>
-            )}
-
-            {/* Show normal chat interface when models are configured */}
-            {hasConfiguredModels === true && (
-              <>
-                {messages.length === 0 && (
-                  <>
-                    <div
-                      className={`border-t ${isDarkMode ? 'border-sky-900' : 'border-sky-100'} mb-2 p-2 shadow-sm backdrop-blur-sm`}>
-                      <ChatInput
-                        onSendMessage={mode === 'rag' ? handleSendMessageRAG : handleSendMessage} 
-                        onStopTask={handleStopTask}                 
-                        onMicClick={mode === 'rag' ? undefined : handleMicClick}                 
-                        isRecording={mode === 'rag' ? false : isRecording}
-                        isProcessingSpeech={mode === 'rag' ? false : isProcessingSpeech}
-                        disabled={!inputEnabled || (mode!=='rag' && isHistoricalSession)}
-                        showStopButton={mode!=='rag' && showStopButton}
-                        setContent={(setter) => { setInputTextRef.current = setter; }}
-                        isDarkMode={isDarkMode}
-                        historicalSessionId={(mode!=='rag' && isHistoricalSession && replayEnabled) ? currentSessionId : null}
-                        onReplay={mode==='rag' ? undefined : handleReplay}
-                      />
-                    </div>
-                    <div className="flex-1 overflow-y-auto">
-                      <BookmarkList
-                        bookmarks={favoritePrompts}
-                        onBookmarkSelect={handleBookmarkSelect}
-                        onBookmarkUpdateTitle={handleBookmarkUpdateTitle}
-                        onBookmarkDelete={handleBookmarkDelete}
-                        onBookmarkReorder={handleBookmarkReorder}
-                        isDarkMode={isDarkMode}
-                      />
-                    </div>
-                  </>
-                )}
-                {messages.length > 0 && (
-                  <div
-                    className={`scrollbar-gutter-stable flex-1 overflow-x-hidden overflow-y-scroll scroll-smooth p-2 ${isDarkMode ? 'bg-slate-900/80' : ''}`}>
-                    <MessageList messages={messages} isDarkMode={isDarkMode} />
-                    <div ref={messagesEndRef} />
-                  </div>
-                )}
-                {isRagLoading && (
-                    <div className="flex items-center p-2 text-sky-500">
-                      <span className="animate-spin mr-2">⏳</span> RAG is loading...
-                    </div>
-                  )}
-                {/* Automate button after RAG response */}
-                {showAutomateButton && (
-                  <div className="flex justify-center my-2">
-                    <button
-                      onClick={handleAutomateTask}
-                      className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg"
-                    >
-                      🤖 Automate This Task
-                    </button>
-                  </div>
-                )}
-                {messages.length > 0 && (
-                  <div
-                    className={`border-t ${isDarkMode ? 'border-sky-900' : 'border-sky-100'} p-2 shadow-sm backdrop-blur-sm`}>
-                    {waitingForUserInput && (
+              )}
+              
+              {messages.length > 0 && (
+                <div
+                  className={`border-t ${isDarkMode ? 'border-sky-900' : 'border-sky-100'} p-2 shadow-sm backdrop-blur-sm`}>
+                  {waitingForUserInput && (
                     <div className={`mx-4 mb-2 p-3 rounded-lg border-l-4 ${
                       isDarkMode
                         ? 'bg-slate-800 text-gray-200 border-slate-600'
                         : 'bg-blue-50 text-gray-800 border-blue-200'
-                        }`}>
+                    }`}>
                       <div className="flex items-center">
                         <span className="text-blue-500 mr-2">💬</span>
                         <span className="text-sm font-medium">Agent is waiting for your response:</span>
@@ -1442,29 +1513,29 @@ useEffect(() => {
                           Context: {waitingForUserInput.context}
                         </p>
                       )}
-                      </div>
-                      )}
-                    <ChatInput
-                      onSendMessage={mode === 'rag' ? handleSendMessageRAG : handleSendMessage} // <-- route here
-                      onStopTask={handleStopTask}                 // RAG doesn’t use stop
-                      onMicClick={mode === 'rag' ? undefined : handleMicClick}                 // (optional) disable STT in RAG for now
-                      isRecording={mode === 'rag' ? false : isRecording}
-                      isProcessingSpeech={mode === 'rag' ? false : isProcessingSpeech}
-                      disabled={!inputEnabled || (mode!=='rag' && isHistoricalSession)}
-                      showStopButton={mode!=='rag' && showStopButton}
-                      setContent={(setter) => { setInputTextRef.current = setter; }}
-                      isDarkMode={isDarkMode}
-                      historicalSessionId={(mode!=='rag' && isHistoricalSession && replayEnabled) ? currentSessionId : null}
-                      onReplay={mode==='rag' ? undefined : handleReplay}
-                    />
-                  </div>
-                )}
-              </>
-            )}
-          </>
-        )}
-      </div>
+                    </div>
+                  )}
+                  <ChatInput
+                    onSendMessage={handleSendMessage} // Always use main handler
+                    onStopTask={handleStopTask}
+                    onMicClick={mode === 'rag' ? undefined : handleMicClick}
+                    isRecording={mode === 'rag' ? false : isRecording}
+                    isProcessingSpeech={mode === 'rag' ? false : isProcessingSpeech}
+                    disabled={!inputEnabled || (mode!=='rag' && isHistoricalSession)}
+                    showStopButton={mode!=='rag' && showStopButton}
+                    setContent={(setter) => { setInputTextRef.current = setter; }}
+                    isDarkMode={isDarkMode}
+                    historicalSessionId={(mode!=='rag' && isHistoricalSession && replayEnabled) ? currentSessionId : null}
+                    onReplay={mode==='rag' ? undefined : handleReplay}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
     </div>
+  </div>
   );
 };
 
