@@ -1320,27 +1320,38 @@ useEffect(() => {
           )}
           
           {/* Compact Switch Toggle */}
-          <div className={`mr-2 relative inline-flex h-6 w-20 items-center rounded-full transition-colors ${
-            mode === 'rag' ? 'bg-indigo-600' : 'bg-blue-600'
-          }`}>
-            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-              mode === 'rag' ? 'translate-x-14' : 'translate-x-1'
-            }`} />
-            <button
-              onClick={() => setMode('automation')}
-              className={`absolute left-0 top-0 h-full w-10 rounded-l-full text-xs font-medium transition-colors ${
-                mode === 'automation' ? 'text-white' : 'text-white/70'
-              }`}>
-              🤖
-            </button>
-            <button
-              onClick={() => setMode('rag')}
-              className={`absolute right-0 top-0 h-full w-10 rounded-r-full text-xs font-medium transition-colors ${
-                mode === 'rag' ? 'text-white' : 'text-white/70'
-              }`}>
-              📚
-            </button>
-          </div>
+          <div
+              className={`relative inline-flex items-center h-8 w-24 rounded-full transition-colors ${
+                mode === 'rag' ? 'bg-indigo-600' : 'bg-blue-600'
+              }`}
+            >
+              {/* White knob */}
+              <div
+                className={`absolute flex items-center justify-center top-0.5 h-7 w-11 rounded-full bg-white shadow transition-transform ${
+                  mode === 'rag' ? 'translate-x-12' : 'translate-x-1'
+                }`}
+              />
+              
+              {/* Automation icon */}
+              <button
+                onClick={() => setMode('automation')}
+                className={`relative z-10 flex flex-1 items-center justify-center text-sm font-medium transition-colors ${
+                  mode === 'automation' ? 'text-blue-600' : 'text-white/80'
+                }`}
+              >
+                🤖
+              </button>
+
+              {/* RAG icon */}
+              <button
+                onClick={() => setMode('rag')}
+                className={`relative z-10 flex flex-1 items-center justify-center text-sm font-medium transition-colors ${
+                  mode === 'rag' ? 'text-indigo-600' : 'text-white/80'
+                }`}
+              >
+                📚
+              </button>
+            </div>
 
           <button
             type="button"
