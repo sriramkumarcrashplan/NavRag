@@ -277,23 +277,32 @@ useEffect(() => {
               setIsHistoricalSession(false);
               break;
             case ExecutionState.TASK_OK:
-              setIsFollowUpMode(true);
+              setIsFollowUpMode(false); // Allow follow-up tasks
               setInputEnabled(true);
+              setShowAutomateButton(false);
               setShowStopButton(false);
               setIsReplaying(false);
-              break;
+              // Reset automate button for next task
+              setShowAutomateButton(false);
+  
+  // Don't reset taskCompleted here - let the new task handle it
+  break;
             case ExecutionState.TASK_FAIL:
               setIsFollowUpMode(true);
               setInputEnabled(true);
               setShowStopButton(false);
               setIsReplaying(false);
+              // Reset automate button for next task
+              setShowAutomateButton(false);
               skip = false;
               break;
             case ExecutionState.TASK_CANCEL:
-              setIsFollowUpMode(false);
+              setIsFollowUpMode(true);
               setInputEnabled(true);
               setShowStopButton(false);
               setIsReplaying(false);
+              // Reset automate button for next task
+              setShowAutomateButton(false);
               skip = false;
               break;
             case ExecutionState.TASK_PAUSE:
@@ -678,42 +687,6 @@ useEffect(() => {
   const trimmedText = text.trim();
   if (!trimmedText) return;
 
-  // For automation mode: Always query RAG first, then show automate button
-  if (mode === 'automation' && !firstQueryDone && ragSessionId) {
-    setIsRagLoading(true);
-    
-    // Add user message first
-    appendMessage({
-      actor: Actors.USER,
-      content: trimmedText,
-      timestamp: Date.now(),
-    });
-    
-    // Step 1: RAG Query Only  
-    const ragResult = await ragAskWithEvents(ragSessionId, trimmedText, (event) => {
-      // Add RAG messages to chat like other agents
-      appendMessage({
-        actor: event.actor,
-        content: event.content,
-        timestamp: event.timestamp,
-      });
-    });
-    
-    setIsRagLoading(false);
-      
-    // Show "Automate" button for this response  
-    setShowAutomateButton(true);
-    setRagResponse({ originalQuery: trimmedText, answer: ragResult.answer, sources: ragResult.sources });
-    setFirstQueryDone(true);
-    return;
-  }
-
-  // For RAG mode: Direct RAG query
-  if (mode === 'rag') {
-    return await handleSendMessageRAG(text);
-  }
-
-  // Rest of your existing automation logic for follow-up queries...
   // Check if we're responding to an agent's question  
   if (waitingForUserInput) {
     try {
@@ -736,7 +709,7 @@ useEffect(() => {
       setWaitingForUserInput(null);
       setInputEnabled(false);
       setShowStopButton(true);
-      return; // Don't proceed with normal task handling  
+      return;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       console.error('Failed to send user response:', err);
@@ -748,7 +721,7 @@ useEffect(() => {
     }
     return;
   }
-  
+
   // Handle commands that start with /  
   if (trimmedText.startsWith('/')) {
     const wasHandled = await handleCommand(trimmedText);
@@ -760,14 +733,68 @@ useEffect(() => {
     console.log('Cannot send messages in historical sessions');
     return;
   }
-  
-  // Rest of the existing handleSendMessage logic for automation...
+
+  // For RAG mode: Direct RAG query
+  if (mode === 'rag') {
+    return await handleSendMessageRAG(text);
+  }
+
+  // For automation mode: Check if this should trigger RAG first or go directly to automation
+  if (mode === 'automation') {
+    // If we just completed a task and user is asking for a new one, treat it as a new RAG query
+    if (!isFollowUpMode || showAutomateButton) {
+      // New task - query RAG first
+      if (ragSessionId) {
+        setIsRagLoading(true);
+        
+        // Add user message first
+        appendMessage({
+          actor: Actors.USER,
+          content: trimmedText,
+          timestamp: Date.now(),
+        });
+        
+        try {
+          // Query RAG first
+          const ragResult = await ragAskWithEvents(ragSessionId, trimmedText, (event) => {
+            appendMessage({
+              actor: event.actor,
+              content: event.content,
+              timestamp: event.timestamp,
+            });
+          });
+          
+          // Show "Automate" button for this response  
+          setShowAutomateButton(true);
+          setRagResponse({ originalQuery: trimmedText, answer: ragResult.answer, sources: ragResult.sources });
+          
+        } catch (error) {
+          console.error('RAG query failed:', error);
+        } finally {
+          setIsRagLoading(false);
+        }
+        return;
+      }
+    } else {
+      // This is a follow-up task - go directly to automation
+      return await handleAutomationTask(text);
+    }
+  }
+
+  // Fallback to direct automation if RAG is not available
+  return await handleAutomationTask(text);
+  };
+
+
+// Separate function for handling automation tasks
+const handleAutomationTask = async (text: string) => {
   try {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tabs[0]?.id;
     if (!tabId) {
       throw new Error('No active tab found');
     }
+    
     setInputEnabled(false);
     setShowStopButton(true);
     
@@ -825,6 +852,7 @@ useEffect(() => {
   };
 
 
+
   // NEW: RAG send
   const handleSendMessageRAG = async (text: string) => {
   const q = text.trim();
@@ -861,12 +889,16 @@ useEffect(() => {
 
   /** Trigger automation using the original RAG query */
   const handleAutomateTask = async () => {
-    if (!ragResponse) return;
-    setShowAutomateButton(false);
-    setMode('automation');
-    // Reuse handleSendMessage to start automation
-    await handleSendMessage(ragResponse.originalQuery!);
+  if (!ragResponse) return;
+  
+  // Hide the automate button and reset follow-up mode
+  setShowAutomateButton(false);
+  setIsFollowUpMode(false); // Reset to allow this to be treated as a new task
+  
+  // Use the automation task handler
+  await handleAutomationTask(ragResponse.originalQuery!);
   };
+
 
   const renderModeToggle = () => (
   <div className={`flex items-center justify-center p-2 border-b ${isDarkMode ? 'border-slate-700 bg-slate-800' : 'border-gray-200 bg-white'}`}>
@@ -940,18 +972,19 @@ useEffect(() => {
   setShowStopButton(false);
   setIsFollowUpMode(false);
   setIsHistoricalSession(false);
-
-  // Reset RAG state for first query
-  setFirstQueryDone(false);
+  
+  // Reset RAG state for new chats
+  setFirstQueryDone(false);  // Reset this flag
   setShowAutomateButton(false);
   setRagResponse(null);
-
-  // Set mode to 'automation' to start - OR consider starting with 'rag' mode if preferred
-  setMode('automation');
-
-  // Disconnect any existing connection
+  
+  // Keep current mode (don't reset to automation)
+  // setMode('automation'); // Remove this line
+  
+  // Disconnect any existing connection  
   stopConnection();
   };
+
 
   const loadChatSessions = useCallback(async () => {
     try {

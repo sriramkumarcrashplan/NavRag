@@ -98,23 +98,34 @@ export class Executor {
   }
 
   addFollowUpTask(task: string): void {
-    // Prevent duplicate tasks
-    const taskHash = this.generateTaskHash(task);
-    if (this.executedTasks.has(taskHash)) {
-      logger.info(`Task already executed, skipping: ${task}`);
-      return;
-    }
-    
-    // Check if task is already in queue
-    if (this.tasks.includes(task)) {
-      logger.info(`Task already in queue, skipping: ${task}`);
-      return;
-    }
-    
-    this.tasks.push(task);
-    this.context.messageManager.addNewTask(task);
-    this.context.actionResults = this.context.actionResults.filter(result => result.includeInMemory);
+  // Prevent adding tasks after completion
+  if (this.context.taskCompleted) {
+    logger.info('Task already completed, ignoring follow-up task:', task);
+    return;
   }
+  
+  // Prevent duplicate tasks
+  const taskHash = this.generateTaskHash(task);
+  if (this.executedTasks.has(taskHash)) {
+    logger.info(`Task already executed, skipping: ${task}`);
+    return;
+  }
+  
+  // Check if task is already in queue
+  if (this.tasks.includes(task)) {
+    logger.info(`Task already in queue, skipping: ${task}`);
+    return;
+  }
+  
+  // Reset completion state for new task
+  this.context.taskCompleted = false;
+  this.context.finalAnswer = null;
+  this.context.actionResults = this.context.actionResults.filter(result => result.includeInMemory);
+  
+  this.tasks.push(task);
+  this.context.messageManager.addNewTask(task);
+  }
+
   
   private generateTaskHash(task: string): string {
   const normalizedTask = task.toLowerCase().trim();
@@ -328,20 +339,22 @@ export class Executor {
     }
   }
 
-
   private isTaskAlreadyCompleted(): boolean {
-    // Enhanced completion check
-    const hasCompletionResult = this.context.actionResults.some(result => 
-      result.isDone || 
-      (result.extractedContent && result.extractedContent.toLowerCase().includes('complete')) ||
-      (result.extractedContent && result.extractedContent.toLowerCase().includes('finished')) ||
-      (result.extractedContent && result.extractedContent.toLowerCase().includes('done'))
-    );
-    
-    const hasFinalAnswer = !!this.context.finalAnswer;
-    const isMarkedComplete = this.context.taskCompleted;
-    
-    return hasCompletionResult || hasFinalAnswer || isMarkedComplete;
+  // Enhanced completion check - only check actual completion indicators
+  const hasCompletionResult = this.context.actionResults.some(result => 
+    result.isDone || 
+    (result.extractedContent && (
+      result.extractedContent.toLowerCase().includes('complete') ||
+      result.extractedContent.toLowerCase().includes('finished') ||
+      result.extractedContent.toLowerCase().includes('done') ||
+      result.extractedContent.toLowerCase().includes('success')
+    ))
+  );
+  
+  const hasFinalAnswer = !!this.context.finalAnswer;
+  const isMarkedComplete = this.context.taskCompleted;
+  
+  return hasCompletionResult || hasFinalAnswer || isMarkedComplete;
   }
 
   private async navigate(): Promise<boolean> {
