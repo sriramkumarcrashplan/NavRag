@@ -88,9 +88,9 @@ I have different types of reports like so whenever user say to open reports firs
 - Asset Assignment report : Click on this whenever user wants to see the asset assignment report for the reports
 | Route | Purpose | Trigger Phrases |
 |-------|---------|-----------------|
-| \`/report/dataProtectionScorecard/Gmail\` | Reports Data Protection | "reports overview", "view" |
+| \`/report/dataProtectionScorecard/Gmail\` | Reports Data Protection | "Data Protection", "data" |
 | \`/report/backupHistory/Gmail\` | Reports backup History| "backup reports", "view backup history" |
-| \`/report/backupOverview/Gmail\` | Reports backup History| "backup reports", "view backup history" |
+| \`/report/backupOverview/Gmail\` | Reports backup Overview| "backup overview", "view backup overview" |
 | \`/report/assetsNotProtected/Gmail\` | Reports assets not protected| "assets not protected", "view unprotected assets" |
 | \`/report/restoreHistory/Gmail\` | Reports restore history| "restore history", "view restore history" |
 | \`/report/assetAssignmentReport/Gmail\` | Reports asset assignment report| "asset assignment", "view asset assignment" |
@@ -143,7 +143,7 @@ I have different types of reports like so whenever user say to open reports firs
 - Asset Assignment report : Click on this whenever user wants to see the asset assignment report for the reports
 | Route | Purpose | Trigger Phrases |
 |-------|---------|-----------------|
-| \`/report/dataProtectionScorecard/Google%20Drive\` | Reports Data Protection | "reports overview", "view" |
+| \`/report/dataProtectionScorecard/Google%20Drive\` | Reports Data Protection | "Data Protection", "data" |
 | \`/report/backupHistory/Google%20Drive\` | Reports backup History| "backup reports", "view backup history" |
 | \`/report/backupOverview/Google%20Drive\` | Reports backup History| "backup reports", "view backup history" |
 | \`/report/assetsNotProtected/Google%20Drive\` | Reports assets not protected| "assets not protected", "view unprotected assets" |
