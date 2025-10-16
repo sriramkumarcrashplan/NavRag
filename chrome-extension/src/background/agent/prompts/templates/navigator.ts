@@ -66,7 +66,7 @@ For accessing the features below in manage assets user has to first click on man
 | \`/pms/gmailPolicy/create\` | Create Gmail policy | "create gmail policy", "new gmail policy", "add gmail policy" |
 -if the user edit policy then use ask_user action to ask the user to provide the name of the policy to edit and then click on that edit icon button corresponding to that policy in actions column
 -if the user view policy then use ask_user action to ask the user to provide the name of the policy to view and then click on that eye icon button corresponding to that policy in actions column
--if the user block policy then use ask_user action to ask the user to provide the name of the policy to block and then click on that block icon button corresponding to that policy in actions column
+-if the user block/delete policy then use ask_user action to ask the user to provide the name of the policy to block/delete and then click on that block icon button corresponding to that policy in actions column, here block and delete both are same.
 -if the user export or download policy then use ask_user action to ask the user to provide the name of the policy to export or download and then click on that export or download icon button corresponding to that policy in actions column
 -if the user clone policy then use ask_user action to ask the user to provide the name of the policy to clone and then click on that clone icon button corresponding to that policy in actions column
 
@@ -121,7 +121,7 @@ For accessing the features below in manage assets user has to first click on man
 | \`/pms/gdrive/create\` | Create Gdrive policy | "create gdrive policy", "new gdrive policy", "add gdrive policy" |
 if the user edit policy then use ask_user action to ask the user to provide the name of the policy to edit and then click on that edit icon button corresponding to that policy in actions column
 if the user view policy then use ask_user action to ask the user to provide the name of the policy to view and then click on that eye icon button corresponding to that policy in actions column
-if the user block policy then use ask_user action to ask the user to provide the name of the policy to block and then click on that block icon button corresponding to that policy in actions column
+if the user block/delete policy then use ask_user action to ask the user to provide the name of the policy to block/delete and then click on that block icon button corresponding to that policy in actions column, here block and delete both are same.
 if the user export or download policy then use ask_user action to ask the user to provide the name of the policy to export or download and then click on that export or download icon button corresponding to that policy in actions column
 if the user clone policy then use ask_user action to ask the user to provide the name of the policy to clone and then click on that clone icon button corresponding to that policy in actions column
 
@@ -198,6 +198,13 @@ If user want to delete existing schedule then use ask_user and ask the user to p
 | \`/users/create\` | Create new user | "create user", "add user", "new account" |
 | \`/users/profile\` | User profile | "user profile", "profile settings", "account details" |
 | \`/userMigration\` | User migration | "user migration", "move users", "migrate users" |
+**You can use the search bar for earching the user**
+if the user wants to edit a user then use ask_user action to ask the user to provide the name of the user to edit and then click on that action column corresponding to that user and then click on that edit profile in the dropdown
+if the user view then use ask_user action to ask the user to provide the name of the asset to view and then click on that action column corresponding to that user and then click on that Assets in the dropdown
+if the user block/delete asset then use ask_user action to ask the user to provide the name of the asset to block/delete and then click on that action column corresponding to that user and then click on that block/delete in the dropdown, here block and delete both are same.
+if the user export or download policy then use ask_user action to ask the user to provide the name of the policy to export or download and then click on that export or download icon button corresponding to that policy in actions column
+if the user clone policy then use ask_user action to ask the user to provide the name of the policy to clone and then click on that clone icon button corresponding to that policy in actions column
+
 
 ### Monitoring & Security
 **Trigger Keywords**: \`monitor\`, \`activities\`, \`unusual\`, \`security\`, \`audit\`

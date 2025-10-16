@@ -1429,7 +1429,7 @@ const handleAutomationTask = async (text: string) => {
               <div className="max-w-md text-center">
                 <img
                   src="/icon-654x128.png"
-                  alt="Nanobrowser Logo"
+                  alt="Logo"
                   className="mx-auto mb-4 w-48 h-auto object-contain"
                 />
                 <h3 className={`mb-2 text-lg font-semibold ${isDarkMode ? 'text-sky-200' : 'text-sky-700'}`}>
@@ -1445,7 +1445,7 @@ const handleAutomationTask = async (text: string) => {
                 </button>
                 <div className="mt-4 text-sm opacity-75">
                   <a
-                    href="https://github.com/nanobrowser/nanobrowser?tab=readme-ov-file#-quick-start"
+                    href=""
                     target="_blank"
                     rel="noopener noreferrer"
                     className={`${isDarkMode ? 'text-sky-400 hover:text-sky-300' : 'text-sky-700 hover:text-sky-600'}`}>
